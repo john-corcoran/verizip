@@ -98,23 +98,40 @@ def add_files_to_zip(
             # e.g. 'C:\' - remove this for adding to the ZIP
             if platform.system() == "Windows":
                 rel_path = rel_path.replace(":", "")
-        if put_all_files_in_shared_root_dir and common_root_directory is not None:
-            zip_handler.write(
-                file_path,
-                arcname=os.path.join(os.path.basename(common_root_directory), rel_path),
+        try:
+            if put_all_files_in_shared_root_dir and common_root_directory is not None:
+                zip_handler.write(
+                    file_path,
+                    arcname=os.path.join(os.path.basename(common_root_directory), rel_path),
+                )
+            else:
+                zip_handler.write(file_path, arcname=rel_path)
+        except IOError:
+            printer(
+                "'{}' no longer present in folder - zip creation aborted".format(file_path),
+                "error",
+                True,
             )
-        else:
-            zip_handler.write(file_path, arcname=rel_path)
+            raise
+        except OSError:
+            printer("OSError on '{}' - zip creation aborted".format(file_path), "error", True)
+            raise
 
 
 def get_file_paths_and_size(paths, ignore_dotfiles, ignore_windows_volume_folders):
     """Get list of file paths at a path (recurses subdirectories) and total size of directory"""
+
+    def walk_error(os_error):
+        """Print user warning and raise OSError"""
+        printer("Cannot access '{}'; zip creation aborted".format(os_error.filename), "error", True)
+        raise os_error
+
     EXCLUDE_FOLDERS = {"$RECYCLE.BIN", "System Volume Information"}
     exclude_folder_seen_log = {}  # type: typing.Dict[str, typing.List[str]]
     files = []
     size = 0
     for path in sorted(paths):
-        for root, dirs, filenames in os.walk(path):
+        for root, dirs, filenames in os.walk(path, onerror=walk_error):
             if ignore_dotfiles:
                 filenames = [f for f in filenames if not f[0] == "."]
                 dirs[:] = [d for d in dirs if not d[0] == "."]
@@ -179,7 +196,29 @@ def get_hash_dict(file_list, root_dir, dir_flag):
     """Return a dictionary of hash values for files at provided file paths"""
     hash_dict = {}
     for file_path in file_list:
-        hash_value = hash_file_at_path(file_path)
+        if not os.path.isfile(file_path):
+            printer(
+                "'{}' has either been deleted or is not a regular file (may be a pipe/socket) - zip"
+                " creation aborted".format(file_path),
+                "error",
+                True,
+            )
+            raise IOError(
+                "'{}' has either been deleted or is not a regular file (may be a pipe/socket) - zip"
+                " creation aborted".format(file_path)
+            )
+        try:
+            hash_value = hash_file_at_path(file_path)
+        except IOError:
+            printer(
+                "'{}' no longer present in folder - zip creation aborted".format(file_path),
+                "error",
+                True,
+            )
+            raise
+        except OSError:
+            printer("OSError on '{}' - zip creation aborted".format(file_path), "error", True)
+            raise
         if hash_value not in hash_dict:
             hash_dict[hash_value] = []
         if root_dir is not None:
